@@ -16,7 +16,7 @@ if len(sys.argv) > 1:
 currency = market.strip('ETH')
 spread_threshold = 0.04  # We start tunnel strategy obove this relation value
 hot_minutes = 30  # Time for active purchases
-while_seconds_delay = 30
+while_seconds_delay = 25
 sell_amount = 0.25
 # buy_amount  = 0.25  # Whe sell all FIAT available
 minimum_sells_in_hot_minutes_to_sell = 3  # How purchases give us confident
@@ -45,7 +45,11 @@ class MyClient(Client):
 
     def update_active_orders(self):
         self.orders = self.get_active_orders(market).data
-
+    
+    def get_active_orders_of_type(self, order_type):
+        self.update_active_orders()
+        return [order for order in self.orders if order['type'] == order_type]
+    
     def update_balances(self):
         self.balances = self.get_balance().data
 
@@ -86,25 +90,23 @@ class MyClient(Client):
                 result += 1
         return result
 
-    def create_sell_order(self, fixed_price=None):
+    def create_sell_order(self, fixed_price=None, amount=sell_amount):
         # Sell ETH
         if fixed_price:
             sell_price = fixed_price
         else:
-            sell_price = self.spread['ask'] - bid_padding
-            eth_global_price = client.get_global_eth_price(currency=currency)
-            sell_for_at_least = eth_global_price * (1 + sell_above_global)
-            if sell_price < sell_for_at_least:
-                # TODO: sell anyway if there is alot of buying activity
-                print 'Current sell price is too low right now to sell.', \
-                       '(should be at least ${})'.format(sell_for_at_least)
-                if self.selling_activity_is_hi():
-                    print 'But recent selling activity is hi, so lets sell.'
-                else:
-                    print 'Also, no rencent selling activity so not worthy.'
-                    return
-        result = self.create_order(market, sell_amount, sell_price, 'sell')
-        print 'New order:', market, 'sell', sell_amount, "at", sell_price
+            sell_price = self.get_best_selling_price_above_spread_threshold()
+            # if sell_price < sell_for_at_least:
+            #     # TODO: sell anyway if there is alot of buying activity
+            #     print 'Current sell price is too low right now to sell.', \
+            #            '(should be at least ${})'.format(sell_for_at_least)
+            #     if self.selling_activity_is_hi():
+            #         print 'But recent selling activity is hi, so lets sell.'
+            #     else:
+            #         print 'Also, no rencent selling activity so not worthy.'
+            #         return
+        result = self.create_order(market, amount, sell_price, 'sell')
+        print 'New order:', 'sell', market, amount, "at", sell_price
         if fixed_price:
             print "(Using fixed_price)"
         return result
@@ -112,8 +114,8 @@ class MyClient(Client):
     def cancel(self, order):
         client.cancel_order(order['id'])
         print "Canceled order:", order['id'], order['type'], \
-                order['amount']['original'], "at", order['price'], \
-                "due to low spread."
+                order['amount']['original'], "at", order['price']
+        return order
 
     def get_buying_last_sell_recover_price(self):
         last_sell_price = self.get_last_order_sell_price()
@@ -124,18 +126,24 @@ class MyClient(Client):
     def get_best_selling_price_above_spread_threshold(self):
         book = self.get_book(market, 'sell').data
         sell_minimun_price = self.spread['bid'] * (1 + spread_threshold)
+        my_sell_orders = self.get_active_orders_of_type('sell')
         for order in book:
             order_price = float(order['price'])
+            if [order for order in my_sell_orders if float(order['price']) == order_price]:
+                continue
             if order_price > sell_minimun_price:
                 return order_price - bid_padding
 
-    # def get_best_buying_price_below_spread_threshold(self):
-    #     book = self.get_book(market, 'buy').data
-    #     buy_maximum_price = self.spread['bid'] * (1 - spread_threshold)
-    #     for order in book:
-    #         order_price = float(order['price'])
-    #         if order_price < buy_maximum_price:
-    #             return order_price - bid_padding
+    def get_best_buying_price_below_spread_threshold(self, less_than=None):
+        book = self.get_book(market, 'buy').data
+        if less_than:
+            buy_maximum_price = less_than
+        else:
+            buy_maximum_price = self.spread['bid'] + bid_padding
+        for order in book:
+            order_price = float(order['price'])
+            if order_price < buy_maximum_price:
+                return order_price + bid_padding
 
     def create_buy_order(self, fixed_price=None):
         # Buy ETH
@@ -156,18 +164,13 @@ class MyClient(Client):
         return result
 
     def reorder(self, order, fixed_price=None):
-        if order['type'] == 'buy' and not fixed_price:
-            buying_recover_price = self.get_buying_last_sell_recover_price()
-            bid_price = self.spread['bid'] + bid_padding
-            if bid_price > buying_recover_price:
-                print "Buy orden in hold so we don't loose eth against last sell"
-                return
-        self.cancel(order)
+        order = self.cancel(order)
         self.update_spread()
         if order['type'] == 'buy':
             self.create_buy_order(fixed_price=fixed_price)
         else:
-            self.create_sell_order(fixed_price=fixed_price)
+            amount = order['amount']['remaining']
+            self.create_sell_order(fixed_price=fixed_price, amount=amount)
 
     def get_USD_convertion_rates(self, to="ARS"):
         currency_rates_api_url = 'http://free.currencyconverterapi.com/api/v3/convert?q=USD_{}&compact=ultra'
@@ -183,14 +186,14 @@ class MyClient(Client):
                 result = response[key]
         return result
 
-    def get_global_eth_price(self, currency='USD'):
+    def get_global_eth_price(self, currency='usd'):
         # Return USD price of ether right now
-        url = 'https://min-api.cryptocompare.com/data/price?fsym=ETH&tsyms=USD'
-        response = requests.get(url)
-        result = float(response.json()['USD'])
-        if str.upper(currency) in ['ARS', 'CLP']:
-            result *= self.get_USD_convertion_rates(to=str.upper(currency))
-        return result
+        # url = 'https://min-api.cryptocompare.com/data/price?fsym=ETH&tsyms=USD'
+        currency = str.lower(currency)
+        url="https://api.coinmarketcap.com/v1/ticker/ethereum/?convert=" + currency
+        response = requests.get(url).json()[0]
+        key = 'price_' + currency
+        return float(response[key])
 
     # def get_USD_ARS_convertion_rate(self):
     #     url = 'http://ws.geeklab.com.ar/dolar/get-dolar-json.php'
@@ -224,11 +227,6 @@ class MyClient(Client):
         balance_eth_available = float([b.available for b in balances if b.wallet == "ETH"][0])
         print "Balances (Available): {}: {} ({}), ETH: {} ({})".format(currency,
             balance_fiat, balance_fiat_available, balance_eth, balance_eth_available)
-
-    def can_buy(self):
-        balances = self.get_balance().data
-        balance_fiat_available = float([b.available for b in balances if b.wallet == currency][0])
-        return buy_minimum < balance_fiat_available
     
     def selling_orders(self):
         orders = client.get_active_orders(market).data
@@ -251,16 +249,71 @@ class MyClient(Client):
 
     def should_sell(self):
         return self.spread_is_hi() or self.selling_activity_is_hi() or self.selling_price_is_hi()
+    
+    def can_buy(self):
+        balances = self.get_balance().data
+        balance_fiat_available = float([b.available for b in balances if b.wallet == currency][0])
+        return buy_minimum < balance_fiat_available
+        
+    def try_to_sell_better(self, order):
+        order_price = float(order['price'])
+        best_selling_price = self.get_best_selling_price_above_spread_threshold()
+        if order_price != best_selling_price:
+            print "Can sell better at: ${}".format(best_selling_price)
+            self.reorder(order, best_selling_price)  # Try to get first on the line
+        else:
+            print "Selling order is at desired price"
+    
+    def try_to_buy_better(self, order):
+        order_price = float(order['price'])
+        if self.can_buy() or order_price < self.spread['bid']:
+                buying_recover_price = self.get_buying_last_sell_recover_price()
+                best_buy_price = self.get_best_buying_price_below_spread_threshold(less_than=buying_recover_price)
+                if best_buy_price != order_price:
+                    self.reorder(order, best_buy_price)  # Try to get first on the line
+        else:
+            print 'Buying order is first on the line at', order['price']
+            book = self.get_book(market, 'buy').data
+            second_buyer_price = float(book[1]['price'])
+            posible_cheaper_buyin_price = second_buyer_price + bid_padding
+            if posible_cheaper_buyin_price < order_price:
+                print 'But will try to buy cheaper...'
+                self.reorder(order, posible_cheaper_buyin_price)
+
+    def try_to_improve_orders(self):
+        for order in self.orders:
+            order_price = float(order['price'])
+            if order['type'] == 'sell':
+                if self.should_sell():
+                    self.try_to_sell_better(order)
+                else:
+                    self.cancel(order)
+            else:
+                # here, order['type'] == 'buy'
+                self.try_to_buy_better(order)
+    
+    def trade(self):
+        self.update_active_orders()
+        if not self.orders:
+            if self.can_buy():
+                # Purchase ETH
+                buy_order = self.create_buy_order()
+            if self.should_sell():
+                # Sell ETH
+                sell_order = self.create_sell_order()
+        else:
+            for order in self.orders:
+                print "1 active order to {} {} at ${}".format(order['type'], \
+                        order['amount']['remaining'], order['price'])
+            client.try_to_improve_orders()
+    
 
 
 client = MyClient(api_key, api_secret)
 print 'Welcome to EtherCryptoBot\n'
 print 'Market chosen: {}\n'.format(market)
 def mainCycle():
-    try:
-        ethars_global_price = client.get_global_eth_price(currency=currency)
-    except:
-        ethars_global_price = "unknown"
+    ethars_global_price = client.get_global_eth_price(currency=currency)
     print "Global {} price: ${}".format(market, ethars_global_price)
     client.print_balances()
     spread = client.get_spread()
@@ -276,55 +329,11 @@ def mainCycle():
     orders = client.get_active_orders(market).data
     # Printing activity
     
-    print "Spread is", "Hi" if client.spread_is_hi() else "Low"
-    print "Selling activity is", "Hi" if client.selling_activity_is_hi() else "Low"
-    print "Sellig price is", "Hi" if client.selling_price_is_hi() else "Low"
+    print "Spread is", u"Hi \u2714" if client.spread_is_hi() else u"Low \u274C" 
+    print "Selling activity is", u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u274C"
+    print "Sellig price is", u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u274C"
 
-    if not orders:
-        if client.can_buy():
-            # Purchase ETH
-            buy_order = client.create_buy_order()
-        if client.should_sell():
-            # Sell ETH
-            sell_order = client.create_sell_order()
-    else:
-        for order in orders:
-            print "1 active order to {} {} at ${}".format(order['type'], \
-                    order['amount']['remaining'], order['price'])
-
-    for order in orders:
-        order_price = float(order['price'])
-        if order['type'] == 'sell':
-            if not client.should_sell():
-                client.cancel(order)
-                continue
-            
-            if order_price > spread['ask']:
-                client.reorder(order)  # Try to get first on the line
-            else:
-                print 'Selling order is first on the line at', order['price']
-                book = client.get_book(market, 'sell').data
-                second_seller_price = float(book[1]['price'])
-                posible_higher_selling_price = second_seller_price - bid_padding
-                if posible_higher_selling_price > order_price:
-                    # Can sell higher
-                    client.reorder(order, posible_higher_selling_price)
-        else:
-            # here, order['type'] == 'buy'
-            if client.can_buy() or order_price < spread['bid']:
-               client.reorder(order)  # Try to get first on the line
-            else:
-                print 'Buying order is first on the line at', order['price']
-                book = client.get_book(market, 'buy').data
-                second_buyer_price = float(book[1]['price'])
-                posible_cheaper_buyin_price = second_buyer_price + bid_padding
-                if posible_cheaper_buyin_price < order_price:
-                    print 'But will try to buy cheaper...'
-                    client.reorder(order, posible_cheaper_buyin_price)
-    
-    if not client.buying_orders() and client.can_buy():
-        client.create_buy_order()
-
+    client.trade()
 
 
 
