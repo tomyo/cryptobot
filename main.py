@@ -262,7 +262,10 @@ class MyClient(Client):
             print "Can sell better at: ${}".format(best_selling_price)
             self.reorder(order, best_selling_price)  # Try to get first on the line
         else:
-            print "Selling order is at desired price"
+            if order_price == self.get_spread()['ask']:
+                print 'Selling order is first on the line'
+            else:
+                print "Selling order is at desired price"
     
     def try_to_buy_better(self, order):
         order_price = float(order['price'])
@@ -294,13 +297,12 @@ class MyClient(Client):
     
     def trade(self):
         self.update_active_orders()
-        if not self.orders:
-            if self.can_buy():
-                # Purchase ETH
-                buy_order = self.create_buy_order()
-            if self.should_sell():
-                # Sell ETH
-                sell_order = self.create_sell_order()
+        if self.should_sell() and not self.get_active_orders_of_type('sell'):
+            # Sell ETH
+            sell_order = self.create_sell_order()
+        if self.can_buy() and not self.get_active_orders_of_type('buy'):
+            # Purchase ETH
+            buy_order = self.create_buy_order()
         else:
             for order in self.orders:
                 print "1 active order to {} {} at ${}".format(order['type'], \
