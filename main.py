@@ -192,14 +192,18 @@ class MyClient(Client):
         book = self.get_book(market, 'sell').data
         sell_minimun_price = self.spread['bid'] * (1 + spread_threshold)
         my_sell_orders = self.get_active_orders_of_type('sell')
-	result = sell_minimun_price
+        selling_price = None
+        if my_sell_orders:
+            selling_price = float(my_sell_orders[0]['price'])
+        result = sell_minimun_price
         for order in book:
             order_price = float(order['price'])
-            if [order for order in my_sell_orders if float(order['price']) == order_price]:
+            if selling_price == order_price:
                 continue
             if order_price > sell_minimun_price:
                 result = order_price - bid_padding
-	return result
+                break
+        return result
 
     def get_best_buying_price_below_spread_threshold(self, less_than=None):
         book = self.get_book(market, 'buy').data
