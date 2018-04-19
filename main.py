@@ -14,7 +14,7 @@ if len(sys.argv) > 1:
     if maybe_market in ['ETHARS', 'ETHCLP']:
         market = maybe_market
 currency = market.strip('ETH')
-spread_threshold = 0.04  # We start tunnel strategy obove this relation value
+spread_threshold = 0.025  # We start tunnel strategy obove this relation value
 hot_minutes = 30  # Time for active purchases
 while_seconds_delay = 25
 sell_amount = 0.25
@@ -23,7 +23,7 @@ minimum_sells_in_hot_minutes_to_sell = 3  # How purchases give us confident
 buy_minimum = 50
 bid_padding_ars = 2
 bid_padding_clp = 20  # Amount to sum or subtract from heading prices in buy/sell
-transaction_commission = 0.007
+transaction_commission = 0.005
 sell_above_global = 0.015  # Will only sell if price is this far up from global
 currency_rates_api_url = 'http://free.currencyconverterapi.com/api/v3/convert?q=USD_{}&compact=ultra'
 change_1h_min_to_sell = 1  # %
