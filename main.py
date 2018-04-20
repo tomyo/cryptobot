@@ -47,6 +47,9 @@ def cached_fun(fun, cache_time_minutes=cache_time_minutes):
     return wrapper
 
 class MyClient(Client):
+    def _get_balance(self):
+        return super(MyClient, self).get_balance()
+
     def __init__(self, *args, **kwargs):
         super(MyClient, self).__init__(*args, **kwargs)
         self.orders = []
@@ -55,7 +58,6 @@ class MyClient(Client):
         self.update_active_orders()
         self.update_spread()
         self.update_balances()
-        self.usd_convertion_rate = {}
 
     def update_active_orders(self):
         self.orders = self.get_active_orders(market).data
@@ -65,7 +67,20 @@ class MyClient(Client):
         return [order for order in self.orders if order['type'] == order_type]
     
     def update_balances(self):
-        self.balances = self.get_balance().data
+        self.balances = self._get_balance().data
+
+    def get_balances(self):
+        self.update_balances()
+        return self.balances
+    
+    def get_balance(self, wallet=None):
+        balances = self.get_balances()
+        if not wallet:
+            return balances
+        else:
+            for balance in balances:
+                if balance['wallet'] == str.upper(wallet):
+                    return balance
 
     def update_spread(self):
         result = {}
@@ -133,7 +148,7 @@ class MyClient(Client):
         return result
 
     def print_balances(self):
-        balances = self.get_balance().data
+        balances = self.get_balances()
         balance_fiat = float([b.balance for b in balances if b.wallet == currency][0])
         balance_fiat_available = float([b.available for b in balances if b.wallet == currency][0])
         balance_eth = float([b.balance for b in balances if b.wallet == "ETH"][0])
@@ -167,8 +182,7 @@ class MyClient(Client):
                 (self.spread_is_hi() or self.selling_activity_is_hi() or self.selling_price_is_hi())
     
     def can_buy(self):
-        balances = self.get_balance().data
-        balance_fiat_available = float([b.available for b in balances if b.wallet == currency][0])
+        balance_fiat_available = self.get_balance(currency).available
         return buy_minimum < balance_fiat_available
     
     def create_sell_order(self, fixed_price=None, amount=sell_amount):
@@ -290,17 +304,21 @@ class MyClient(Client):
     
     def trade(self):
         self.update_active_orders()
-        if self.should_sell() and not self.get_active_orders_of_type('sell'):
-            # Sell ETH
-            self.create_sell_order()
-        if self.can_buy() and not self.get_active_orders_of_type('buy'):
-            # Purchase ETH
-           self.create_buy_order()
-        else:
+        if self.orders:
             for order in self.orders:
                 print "1 active order to {} {} at ${}".format(order['type'], \
                         order['amount']['remaining'], order['price'])
             client.try_to_improve_orders()
+        else:
+            # No active orders
+            if self.can_buy():
+                # Purchase ETH
+                self.create_buy_order()
+            else:
+                if self.should_sell():
+                    # Sell ETH
+                    self.create_sell_order()
+            
     
 
 
