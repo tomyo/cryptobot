@@ -71,14 +71,6 @@ class MyClient(Client):
                 # This is last sell trade made
                 return float(order['price'])
 
-    def cancel_orders(self):
-        for order in self.orders:
-            if order['type'] == 'sell':
-                print 'order to cancel', order
-                result = self.cancel_order(order['id'])
-                print "Order: {} to {} at {} Canceled".format(result['id'],
-                                              result['type'], result['price'])
-
     def get_last_trades(self, type='all', minutes_before_now=60):
         # `type`: can be 'sell', 'buy' or 'all'
         trades = self.get_trades(market).data
@@ -106,16 +98,22 @@ class MyClient(Client):
                 # TODO: sell anyway if there is alot of buying activity
                 print 'Current sell price is too low right now to sell.', \
                        '(should be at least ${})'.format(sell_for_at_least)
-                if self.is_good_time_to_sell():
+                if self.selling_activity_is_hi():
                     print 'But recent selling activity is hi, so lets sell.'
                 else:
                     print 'Also, no rencent selling activity so not worthy.'
                     return
         result = self.create_order(market, sell_amount, sell_price, 'sell')
-        print 'New order:', market, sell_amount, "at", sell_price, 'sell'
+        print 'New order:', market, 'sell', sell_amount, "at", sell_price
         if fixed_price:
             print "(Using fixed_price)"
         return result
+
+    def cancel(self, order):
+        client.cancel_order(order['id'])
+        print "Canceled order:", order['id'], order['type'], \
+                order['amount']['original'], "at", order['price'], \
+                "due to low spread."
 
     def get_buying_last_sell_recover_price(self):
         last_sell_price = self.get_last_order_sell_price()
@@ -153,8 +151,8 @@ class MyClient(Client):
             bid_price = fixed_price
         eth_to_buy = balance_fiat_available / bid_price
         result = self.create_order(market, eth_to_buy, bid_price, 'buy')
-        print 'New order:', market, eth_to_buy, "at", bid_price, 'buy', \
-              "({})".format(balance_fiat_available)
+        print 'New order:', 'buy', market, eth_to_buy, "at", bid_price, \
+              "(${})".format(balance_fiat_available)
         return result
 
     def reorder(self, order, fixed_price=None):
@@ -164,9 +162,7 @@ class MyClient(Client):
             if bid_price > buying_recover_price:
                 print "Buy orden in hold so we don't loose eth against last sell"
                 return
-        self.cancel_order(order['id'])
-        print "Canceled order:", order['id'], order['type'], \
-               order['amount']['original'], "at", order['price']
+        self.cancel(order)
         self.update_spread()
         if order['type'] == 'buy':
             self.create_buy_order(fixed_price=fixed_price)
@@ -174,14 +170,17 @@ class MyClient(Client):
             self.create_sell_order(fixed_price=fixed_price)
 
     def get_USD_convertion_rates(self, to="ARS"):
+        currency_rates_api_url = 'http://free.currencyconverterapi.com/api/v3/convert?q=USD_{}&compact=ultra'
         to = str.upper(to)
+        result = 0
         if self.usd_convertion_rate.has_key(to):
-            result = self.usd_convertion_rate.has_key[to]
+            result = self.usd_convertion_rate[to]
         else:
             url = currency_rates_api_url.format(to)
             response = requests.get(url).json()
             key = 'USD_' + to
-            result = response[key]
+            if response.has_key(key):
+                result = response[key]
         return result
 
     def get_global_eth_price(self, currency='USD'):
@@ -230,37 +229,62 @@ class MyClient(Client):
         balances = self.get_balance().data
         balance_fiat_available = float([b.available for b in balances if b.wallet == currency][0])
         return buy_minimum < balance_fiat_available
+    
+    def selling_orders(self):
+        orders = client.get_active_orders(market).data
+        return [order for order in orders if order['type'] == 'sell']
+    
+    def buying_orders(self):
+        orders = client.get_active_orders(market).data
+        return [order for order in orders if order['type'] == 'buy']
 
-    def is_good_time_to_sell(self):
+    def selling_activity_is_hi(self):
         recent_sells = self.get_last_trades('sell', hot_minutes)
         return recent_sells >= minimum_sells_in_hot_minutes_to_sell
-    # def get_ETH_ARS_global_price(self):
-    #     return self.get_global_eth_price() * self.get_USD_ARS_convertion_rate()
+    
+    def spread_is_hi(self):
+        return spread_threshold <= self.spread['relation']  
+    
+    def selling_price_is_hi(self):
+        global_price = self.get_global_eth_price(currency=currency)
+        return global_price * (1 + sell_above_global) < self.get_spread()['ask']
+
+    def should_sell(self):
+        return self.spread_is_hi() or self.selling_activity_is_hi() or self.selling_price_is_hi()
+
 
 client = MyClient(api_key, api_secret)
 print 'Welcome to EtherCryptoBot\n'
 print 'Market chosen: {}\n'.format(market)
 def mainCycle():
+    try:
+        ethars_global_price = client.get_global_eth_price(currency=currency)
+    except:
+        ethars_global_price = "unknown"
+    print "Global {} price: ${}".format(market, ethars_global_price)
+    client.print_balances()
     spread = client.get_spread()
     print "Spread:", spread
-    ethars_global_price = client.get_global_eth_price(currency=currency)
-    client.print_balances()
+    
     # Getting recent trades
     sells = client.get_last_trades('sell', hot_minutes)
     purchases = client.get_last_trades('buy', hot_minutes)
     print 'Activity:'
     print "{} sells made in the last {} minutes".format(sells, hot_minutes)
     print "{} purchases made in the last {} minutes".format(purchases, hot_minutes)
-
     # Getting open orders
     orders = client.get_active_orders(market).data
     # Printing activity
-    print "Global {} price: ${}".format(market, ethars_global_price)
+    
+    print "Spread is", "Hi" if client.spread_is_hi() else "Low"
+    print "Selling activity is", "Hi" if client.selling_activity_is_hi() else "Low"
+    print "Sellig price is", "Hi" if client.selling_price_is_hi() else "Low"
+
     if not orders:
         if client.can_buy():
             # Purchase ETH
             buy_order = client.create_buy_order()
-        else:
+        if client.should_sell():
             # Sell ETH
             sell_order = client.create_sell_order()
     else:
@@ -268,27 +292,13 @@ def mainCycle():
             print "1 active order to {} {} at ${}".format(order['type'], \
                     order['amount']['remaining'], order['price'])
 
-    if spread['relation'] < spread_threshold:
-        print "Spread is too low"
-
     for order in orders:
         order_price = float(order['price'])
         if order['type'] == 'sell':
-            if spread['relation'] < spread_threshold:
-                # here, order['type'] == 'buy'
-                # ticker = client.get_ETH_global_hour_ticker()
-                # if ticker['change'] > 1:
-                #     continue
-                # low_spread_selling_price = client.get_best_selling_price_above_spread_threshold()
-                # if float(order['price']) != low_spread_selling_price:
-                #     print "Using best_selling_price_above_spread_threshold"
-                #     client.reorder(order, low_spread_selling_price)
-                client.cancel_order(order['id'])
-                print "Canceled order:", order['id'], order['type'], \
-                       order['amount']['original'], "at", order['price'], \
-                       "due to low spread."
+            if not client.should_sell():
+                client.cancel(order)
                 continue
-            # If we are here, spread is wide enough, fun time.
+            
             if order_price > spread['ask']:
                 client.reorder(order)  # Try to get first on the line
             else:
@@ -300,9 +310,9 @@ def mainCycle():
                     # Can sell higher
                     client.reorder(order, posible_higher_selling_price)
         else:
-            # here, order['type'] == 'sell'
-            if order_price < spread['bid']:
-                client.reorder(order)  # Try to get first on the line
+            # here, order['type'] == 'buy'
+            if client.can_buy() or order_price < spread['bid']:
+               client.reorder(order)  # Try to get first on the line
             else:
                 print 'Buying order is first on the line at', order['price']
                 book = client.get_book(market, 'buy').data
@@ -311,6 +321,10 @@ def mainCycle():
                 if posible_cheaper_buyin_price < order_price:
                     print 'But will try to buy cheaper...'
                     client.reorder(order, posible_cheaper_buyin_price)
+    
+    if not client.buying_orders() and client.can_buy():
+        client.create_buy_order()
+
 
 
 
