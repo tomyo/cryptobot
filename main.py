@@ -182,7 +182,7 @@ class MyClient(Client):
                 (self.spread_is_hi() or self.selling_activity_is_hi() or self.selling_price_is_hi())
     
     def can_buy(self):
-        balance_fiat_available = self.get_balance(currency).available
+        balance_fiat_available = float(self.get_balance(currency).available)
         return buy_minimum < balance_fiat_available
     
     def create_sell_order(self, fixed_price=None, amount=sell_amount):
