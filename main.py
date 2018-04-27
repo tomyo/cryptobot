@@ -346,9 +346,18 @@ def mainCycle():
     print "{} sells made in the last {} minutes".format(sells, hot_minutes)
     print "{} purchases made in the last {} minutes".format(purchases, hot_minutes)
     # Printing market status
-    print "Spread is", u"Hi \u2714" if client.spread_is_hi() else u"Low \u274C" 
-    print "Selling activity is", u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u274C"
-    print "Sellig price is", u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u274C"
+    print "Spread is", u"Hi \u2714" if client.spread_is_hi() else u"Low \u274C", \
+          "({} <= %{})".format(spread['porcentage'], spread_threshold * 100)
+    print "Selling activity is", u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u274C", \
+          "(at least {} in the last {} minutes)".format(minimum_sells_in_hot_minutes_to_sell, hot_minutes)
+    global_price = client.get_global_eth_price(currency=currency)
+    sell_percentage_above_global = (1 - global_price / client.spread['bid'])
+    print "Sellig price is", u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u274C", \
+          "(%{} above global, specting at least %{})".format(sell_percentage_above_global//0.001/10, sell_above_global*100)
+    global_price_change_is_low = float(ticker['percent_change_1h']) < change_1h_min_to_sell
+    
+    print "Global price change is", u"Low \u2714" if global_price_change_is_low else u"Hi \u274C", \
+          "(%{} < %{})".format(ticker['percent_change_1h'], change_1h_min_to_sell)
 
     client.trade()
 
