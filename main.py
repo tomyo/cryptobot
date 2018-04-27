@@ -173,7 +173,8 @@ class MyClient(Client):
     
     def selling_price_is_hi(self):
         global_price = self.get_global_eth_price(currency=currency)
-        return global_price * (1 + sell_above_global) < self.get_spread()['ask']
+        return global_price * (1 + sell_above_global) < self.get_spread()['bid']
+    
 
     def should_sell(self):
         ticker = client.get_global_eth_ticker(currency=currency)
@@ -308,7 +309,10 @@ class MyClient(Client):
             for order in self.orders:
                 print "1 active order to {} {} at ${}".format(order['type'], \
                         order['amount']['remaining'], order['price'])
-            client.try_to_improve_orders()
+            self.try_to_improve_orders()
+            if not self.get_active_orders_of_type('buy') and self.can_buy():
+                # This happen when a partial sell have been executed, so we should start buying
+                self.create_buy_order()
         else:
             # No active orders
             if self.can_buy():
