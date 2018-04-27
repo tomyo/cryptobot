@@ -24,9 +24,9 @@ buy_minimum = 50
 bid_padding_ars = 2
 bid_padding_clp = 20  # Amount to sum or subtract from heading prices in buy/sell
 transaction_commission = 0.005
-sell_above_global = 0.015  # Will only sell if price is this far up from global
+sell_above_global = 0.07  # Will only sell if price is this far up from global
 currency_rates_api_url = 'http://free.currencyconverterapi.com/api/v3/convert?q=USD_{}&compact=ultra'
-change_1h_min_to_sell = 1  # %
+change_1h_min_to_sell = 0.51  # %
 cache_time_minutes = 1
 
 bid_padding = bid_padding_ars
