@@ -272,7 +272,10 @@ class MyClient(Client):
             if order_price == self.get_spread()['ask']:
                 print 'Selling order is first on the line'
             else:
-                print "Selling order is at desired price"
+                order_price = float(order['price'])
+                percentage_above = (1 - self.spread['bid'] / order_price)//0.0001/100
+                extraText = "(%{} above bid price)".format(percentage_above)
+                print "Selling order is at desired price", extraText
     
     def try_to_buy_better(self, order):
         order_price = float(order['price'])
