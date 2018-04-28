@@ -26,7 +26,7 @@ bid_padding_clp = 20  # Amount to sum or subtract from heading prices in buy/sel
 transaction_commission = 0.005
 sell_above_global = 0.07  # Will only sell if price is this far up from global
 currency_rates_api_url = 'http://free.currencyconverterapi.com/api/v3/convert?q=USD_{}&compact=ultra'
-change_1h_min_to_sell = 0.51  # %
+change_1h_min_to_sell = 0.54  # %
 cache_time_minutes = 1
 
 bid_padding = bid_padding_ars
@@ -175,6 +175,8 @@ class MyClient(Client):
         global_price = self.get_global_eth_price(currency=currency)
         return global_price * (1 + sell_above_global) < self.get_spread()['bid']
     
+    def global_price_change_is_low(self):
+        pass
 
     def should_sell(self):
         ticker = client.get_global_eth_ticker(currency=currency)
@@ -351,14 +353,13 @@ def mainCycle():
     # Printing market status
     print "Spread is", u"Hi \u2714" if client.spread_is_hi() else u"Low \u274C", \
           "({} <= %{})".format(spread['porcentage'], spread_threshold * 100)
-    print "Selling activity is", u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u274C", \
-          "(at least {} in the last {} minutes)".format(minimum_sells_in_hot_minutes_to_sell, hot_minutes)
     global_price = client.get_global_eth_price(currency=currency)
     sell_percentage_above_global = (1 - global_price / client.spread['bid'])
     print "Sellig price is", u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u274C", \
           "(%{} above global, specting at least %{})".format(sell_percentage_above_global//0.001/10, sell_above_global*100)
+    print "Selling activity is", u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u274C", \
+          "(at least {} in the last {} minutes)".format(minimum_sells_in_hot_minutes_to_sell, hot_minutes)
     global_price_change_is_low = float(ticker['percent_change_1h']) < change_1h_min_to_sell
-    
     print "Global price change is", u"Low \u2714" if global_price_change_is_low else u"Hi \u274C", \
           "(%{} < %{})".format(ticker['percent_change_1h'], change_1h_min_to_sell)
 
