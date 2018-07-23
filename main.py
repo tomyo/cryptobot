@@ -14,10 +14,10 @@ if len(sys.argv) > 1:
     if maybe_market in ['ETHARS', 'ETHCLP']:
         market = maybe_market
 currency = market.strip('ETH')
-spread_threshold = 0.025  # We start tunnel strategy obove this relation value
+spread_threshold = 0.03  # We start tunnel strategy obove this relation value
 hot_minutes = 30  # Time for active purchases
-while_seconds_delay = 25
-sell_amount = 0.25
+while_seconds_delay = 20
+sell_amount = 0.42
 # buy_amount  = 0.25  # Whe sell all FIAT available
 minimum_sells_in_hot_minutes_to_sell = 3  # How purchases give us confident
 buy_minimum = 50
