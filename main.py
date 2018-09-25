@@ -11,19 +11,21 @@ from api_keys import api_key, api_secret
 market = "ETHARS"
 if len(sys.argv) > 1:
     maybe_market = str.upper(sys.argv[1])
-    if maybe_market in ['ETHARS', 'ETHCLP']:
+    if maybe_market in ['ETHARS', 'ETHCLP', 'XLMARS', 'XLMCLP']:
         market = maybe_market
-currency = market.strip('ETH')
+currency = min(market.strip('XLM'), market.strip('ETH'))
+crypto = min(market.strip('ARS'), market.strip('CLP'))
+crypto_long_name = 'ethereum' if crypto == 'ETH' else 'stellar'
 spread_threshold = 0.03  # We start tunnel strategy obove this relation value
 hot_minutes = 30  # Time for active purchases
 while_seconds_delay = 20
-sell_amount = 0.42
+sell_amount = 0.5 if crypto == 'ETH' else 10
 # buy_amount  = 0.25  # Whe sell all FIAT available
 minimum_sells_in_hot_minutes_to_sell = 3  # How purchases give us confident
-buy_minimum = 50
-bid_padding_ars = 2
+buy_minimum = 50 # (ars available to buy)
+bid_padding_ars = 2 if crypto == 'ETH' else 0.005
 bid_padding_clp = 20  # Amount to sum or subtract from heading prices in buy/sell
-transaction_commission = 0.005
+transaction_commission = 0.0034  # Level 3 on cryptomkt
 sell_above_global = 0.07  # Will only sell if price is this far up from global
 currency_rates_api_url = 'http://free.currencyconverterapi.com/api/v3/convert?q=USD_{}&compact=ultra'
 change_1h_min_to_sell = 0.54  # %
@@ -53,6 +55,7 @@ class MyClient(Client):
     def __init__(self, *args, **kwargs):
         super(MyClient, self).__init__(*args, **kwargs)
         self.orders = []
+        self.orders_cache = []
         self.spread = {}
         self.balances = []
         self.update_active_orders()
@@ -60,7 +63,12 @@ class MyClient(Client):
         self.update_balances()
 
     def update_active_orders(self):
-        self.orders = self.get_active_orders(market).data
+        new_orders = self.get_active_orders(market).data
+        if new_orders:
+            self.orders_cache = self.orders        
+            self.orders = new_orders
+        else:
+            self.orders = []
     
     def get_active_orders_of_type(self, order_type):
         self.update_active_orders()
@@ -102,7 +110,7 @@ class MyClient(Client):
         for order in last_orders:
             if order['type'] == 'sell':
                 # This is last sell trade made
-                return float(order['price'])
+                return float(order['execution_price'])
 
     def get_last_trades(self, type='all', minutes_before_now=60):
         # `type`: can be 'sell', 'buy' or 'all'
@@ -120,23 +128,27 @@ class MyClient(Client):
         return result
 
     def cancel(self, order):
-        client.cancel_order(order['id'])
+        try:
+            client.cancel_order(order['id'])
+        except Exception as inst:
+            print type(inst), inst
+            traceback.print_exc()
         print "Canceled order:", order['type'], \
                 order['amount']['original'], "at", order['price']
         return order
 
-    def get_global_eth_price(self, currency='usd'):
-        # Return USD price of ether right now
-        # url = 'https://min-api.cryptocompare.com/data/price?fsym=ETH&tsyms=USD'
-        result = self.get_global_eth_ticker(currency)
+    def get_global_crypto_price(self, currency='usd'):
+        # Return USD price of crypto right now
+        # url = 'https://min-api.cryptocompare.com/data/price?fsym={crypto}&tsyms=USD'
+        result = self.get_global_crypto_ticker(currency)
         key = 'price_' + str.lower(currency)
         return float(result[key])
 
     @cached_fun
-    def get_global_eth_ticker(self, currency='usd'):
-        # url = 'https://api.cryptonator.com/api/ticker/eth-usd'
+    def get_global_crypto_ticker(self, currency='usd'):
+        # url = 'https://api.cryptonator.com/api/ticker/'
         currency = str.lower(currency)
-        url = 'https://api.coinmarketcap.com/v1/ticker/ethereum/?convert=' + currency
+        url = 'https://api.coinmarketcap.com/v1/ticker/{}/?convert={}'.format(crypto_long_name, currency)
         response = requests.get(url)
         result = None
         while not result:
@@ -151,10 +163,10 @@ class MyClient(Client):
         balances = self.get_balances()
         balance_fiat = float([b.balance for b in balances if b.wallet == currency][0])
         balance_fiat_available = float([b.available for b in balances if b.wallet == currency][0])
-        balance_eth = float([b.balance for b in balances if b.wallet == "ETH"][0])
-        balance_eth_available = float([b.available for b in balances if b.wallet == "ETH"][0])
-        print "Balances (Available): {}: {} ({}), ETH: {} ({})".format(currency,
-            balance_fiat, balance_fiat_available, balance_eth, balance_eth_available)
+        balance_crypto = float([b.balance for b in balances if b.wallet == crypto][0])
+        balance_crypto_available = float([b.available for b in balances if b.wallet == crypto][0])
+        print "Balances (Available): {}: {} ({}), {}: {} ({})".format(currency,
+            balance_fiat, balance_fiat_available, crypto, balance_crypto, balance_crypto_available)
     
     def selling_orders(self):
         orders = client.get_active_orders(market).data
@@ -172,14 +184,14 @@ class MyClient(Client):
         return spread_threshold <= self.spread['relation']  
     
     def selling_price_is_hi(self):
-        global_price = self.get_global_eth_price(currency=currency)
+        global_price = self.get_global_crypto_price(currency=currency)
         return global_price * (1 + sell_above_global) < self.get_spread()['bid']
     
     def global_price_change_is_low(self):
         pass
 
     def should_sell(self):
-        ticker = client.get_global_eth_ticker(currency=currency)
+        ticker = client.get_global_crypto_ticker(currency=currency)
         change_1h = float(ticker['percent_change_1h'])
         return change_1h < change_1h_min_to_sell and \
                 (self.spread_is_hi() or self.selling_activity_is_hi() or self.selling_price_is_hi())
@@ -189,7 +201,7 @@ class MyClient(Client):
         return buy_minimum < balance_fiat_available
     
     def create_sell_order(self, fixed_price=None, amount=sell_amount):
-        # Sell ETH
+        # Sell Crypto
         if fixed_price:
             sell_price = fixed_price
         else:
@@ -238,7 +250,7 @@ class MyClient(Client):
                 return order_price + bid_padding
 
     def create_buy_order(self, fixed_price=None):
-        # Buy ETH
+        # Buy Crypto
         self.update_balances()
         balance_fiat_available = float([b.available for b in self.balances if b.wallet == currency][0])
         if not fixed_price:
@@ -249,9 +261,9 @@ class MyClient(Client):
                 print "Using last_sell_recover_price: ", buying_recover_price
         else:
             bid_price = fixed_price
-        eth_to_buy = balance_fiat_available / bid_price
-        result = self.create_order(market, eth_to_buy, bid_price, 'buy')
-        print 'New order:', 'buy', market, eth_to_buy, "at", bid_price, \
+        crypto_to_buy = balance_fiat_available / bid_price
+        result = self.create_order(market, crypto_to_buy, bid_price, 'buy')
+        print 'New order:', 'buy', market, crypto_to_buy, "at", bid_price, \
               "(${})".format(balance_fiat_available)
         return result
 
@@ -284,6 +296,7 @@ class MyClient(Client):
         if order_price < self.spread['bid'] or self.can_buy(): # can_bay() == have enough balance in fiat to buy more
             # Order is not first
             buying_recover_price = self.get_buying_last_sell_recovery_price()
+            print "buying_recover_price", buying_recover_price, self.get_best_buying_price_below_spread_threshold()
             best_buy_price = self.get_best_buying_price_below_spread_threshold(less_than=buying_recover_price)
             if best_buy_price != order_price:
                 print "Can buy better at: ${}".format(best_buy_price)
@@ -312,6 +325,7 @@ class MyClient(Client):
         self.update_active_orders()
         if self.orders:
             for order in self.orders:
+                
                 print "1 active order to {} {} at ${}".format(order['type'], \
                         order['amount']['remaining'], order['price'])
             self.try_to_improve_orders()
@@ -321,23 +335,23 @@ class MyClient(Client):
         else:
             # No active orders
             if self.can_buy():
-                # Purchase ETH
+                # Purchase Crypto
                 self.create_buy_order()
             else:
                 if self.should_sell():
-                    # Sell ETH
+                    # Sell Crypto
                     self.create_sell_order()
             
     
 
 
 client = MyClient(api_key, api_secret)
-print 'Welcome to EtherCryptoBot\n'
+print 'Welcome to CryptoBot\n'
 print 'Market chosen: {}\n'.format(market)
 def mainCycle():
-    ticker = client.get_global_eth_ticker(currency=currency)
-    ethars_global_price = ticker['price_' + str.lower(currency)]
-    print "Global {} price: ${}".format(market, ethars_global_price)
+    ticker = client.get_global_crypto_ticker(currency=currency)
+    crypto_global_price = ticker['price_' + str.lower(currency)]
+    print "Global {} price: ${}".format(market, crypto_global_price)
     print "Global change in last hour: %" + ticker['percent_change_1h']
     client.print_balances()
     spread = client.get_spread()
@@ -353,7 +367,7 @@ def mainCycle():
     # Printing market status
     print "Spread is", u"Hi \u2714" if client.spread_is_hi() else u"Low \u274C", \
           "({} <= %{})".format(spread['porcentage'], spread_threshold * 100)
-    global_price = client.get_global_eth_price(currency=currency)
+    global_price = client.get_global_crypto_price(currency=currency)
     sell_percentage_above_global = (1 - global_price / client.spread['bid'])
     print "Sellig price is", u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u274C", \
           "(%{} above global, specting at least %{})".format(sell_percentage_above_global//0.001/10, sell_above_global*100)
