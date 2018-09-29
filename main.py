@@ -4,9 +4,11 @@ from datetime import datetime
 import time
 import sys
 sys.path.append("./cryptomkt")
-from cryptomkt.exchange.client import Client
+from cryptomarket.exchange.client import Client
+
 import requests
 from api_keys import api_key, api_secret
+from reprint import output
 
 market = "ETHARS"
 if len(sys.argv) > 1:
@@ -30,10 +32,19 @@ sell_above_global = 0.07  # Will only sell if price is this far up from global
 currency_rates_api_url = 'http://free.currencyconverterapi.com/api/v3/convert?q=USD_{}&compact=ultra'
 change_1h_min_to_sell = 0.54  # %
 cache_time_minutes = 1
+stop_order_price = 2  # Any order at a price of 2 is a stop activity order
 
 bid_padding = bid_padding_ars
 if market == 'ETHCLP':
     bid_padding = bid_padding_clp
+debug_mode = False
+
+def debug(*args):
+    if debug_mode:
+        print args
+    else:
+        global output
+        output['Last event'] = ', '.join([str(a) for a in args])
 
 # Decorator to cache fun results for wanted time, so we don't make too many requests
 def cached_fun(fun, cache_time_minutes=cache_time_minutes):
@@ -41,8 +52,8 @@ def cached_fun(fun, cache_time_minutes=cache_time_minutes):
     def wrapper(*args, **kwargs):
         now = time.time()
         if cache['time'] + cache_time_minutes * 60 < now:
-            print 'Filling cache for result of fun: {} for {} seconds'.format(
-                fun.__name__, cache_time_minutes * 60)
+            debug('Filling cache for result of fun: {} for {} seconds'.format(
+                fun.__name__, cache_time_minutes * 60))
             cache['result'] = fun(*args, **kwargs)
             cache['time'] = now
         return cache['result']
@@ -133,8 +144,8 @@ class MyClient(Client):
         except Exception as inst:
             print type(inst), inst
             traceback.print_exc()
-        print "Canceled order:", order['type'], \
-                order['amount']['original'], "at", order['price']
+        debug("Canceled order:", order['type'], \
+                order['amount']['original'], "at", order['price'])
         return order
 
     def get_global_crypto_price(self, currency='usd'):
@@ -160,12 +171,13 @@ class MyClient(Client):
         return result
 
     def print_balances(self):
+        global output
         balances = self.get_balances()
         balance_fiat = float([b.balance for b in balances if b.wallet == currency][0])
         balance_fiat_available = float([b.available for b in balances if b.wallet == currency][0])
         balance_crypto = float([b.balance for b in balances if b.wallet == crypto][0])
         balance_crypto_available = float([b.available for b in balances if b.wallet == crypto][0])
-        print "Balances (Available): {}: {} ({}), {}: {} ({})".format(currency,
+        output["Balances (Available)"] = "{}: {} ({}), {}: {} ({})".format(currency,
             balance_fiat, balance_fiat_available, crypto, balance_crypto, balance_crypto_available)
     
     def selling_orders(self):
@@ -207,9 +219,10 @@ class MyClient(Client):
         else:
             sell_price = self.get_best_selling_price_above_spread_threshold()
         result = self.create_order(market, amount, sell_price, 'sell')
-        print 'New order:', 'sell', market, amount, "at", sell_price
+        output['Active sell order'] = "{:.3f} at ${:.3f} (${:.2f})".format(amount, sell_price, amount * sell_price)
+        debug('New order:', 'sell', market, amount, "at", sell_price)
         if fixed_price:
-            print "(Using fixed_price)"
+            debug("(Using fixed_price)")
         return result
 
     def get_buying_last_sell_recovery_price(self):
@@ -258,13 +271,14 @@ class MyClient(Client):
             buying_recover_price = self.get_buying_last_sell_recovery_price()
             if bid_price > buying_recover_price:
                 bid_price = buying_recover_price
-                print "Using last_sell_recover_price: ", buying_recover_price
+                debug("Using last_sell_recover_price: ", buying_recover_price)
         else:
             bid_price = fixed_price
         crypto_to_buy = balance_fiat_available / bid_price
         result = self.create_order(market, crypto_to_buy, bid_price, 'buy')
-        print 'New order:', 'buy', market, crypto_to_buy, "at", bid_price, \
-              "(${})".format(balance_fiat_available)
+        output['Active buy order'] = "{:.3f} at ${:.3f} (${:.2f})".format(crypto_to_buy, bid_price, crypto_to_buy * bid_price)
+        debug('New order:', 'buy', market, crypto_to_buy, "at", bid_price, \
+              "(${})".format(balance_fiat_available))
         return result
 
     def reorder(self, order, fixed_price=None):
@@ -280,34 +294,34 @@ class MyClient(Client):
         order_price = float(order['price'])
         best_selling_price = self.get_best_selling_price_above_spread_threshold()
         if order_price != best_selling_price:
-            print "Can sell better at: ${}".format(best_selling_price)
+            debug("Can sell better at: ${}".format(best_selling_price))
             self.reorder(order, best_selling_price)  # Try to get first on the line
         else:
             if order_price == self.get_spread()['ask']:
-                print 'Selling order is first on the line'
+                debug('Selling order is first on the line')
             else:
                 order_price = float(order['price'])
                 percentage_above = (1 - self.spread['bid'] / order_price)//0.0001/100
                 extraText = "(%{} above bid price)".format(percentage_above)
-                print "Selling order is at desired price", extraText
+                debug("Selling order is at desired price", extraText)
     
     def try_to_buy_better(self, order):
         order_price = float(order['price'])
         if order_price < self.spread['bid'] or self.can_buy(): # can_bay() == have enough balance in fiat to buy more
             # Order is not first
             buying_recover_price = self.get_buying_last_sell_recovery_price()
-            print "buying_recover_price", buying_recover_price, self.get_best_buying_price_below_spread_threshold()
+            debug("buying_recover_price: {}, otherwise would sell at {}".format(buying_recover_price, self.get_best_buying_price_below_spread_threshold()))
             best_buy_price = self.get_best_buying_price_below_spread_threshold(less_than=buying_recover_price)
             if best_buy_price != order_price:
-                print "Can buy better at: ${}".format(best_buy_price)
+                debug("Can buy better at: ${}".format(best_buy_price))
                 self.reorder(order, best_buy_price)  # Try to get first on the line
         else:
-            print 'Buying order is first on the line at', order['price']
+            debug('Buying order is first on the line at', order['price'])
             book = self.get_book(market, 'buy').data
             second_buyer_price = float(book[1]['price'])
             posible_cheaper_buyin_price = second_buyer_price + bid_padding
             if posible_cheaper_buyin_price < order_price:
-                print 'But will try to buy cheaper...'
+                debug('But will try to buy cheaper...')
                 self.reorder(order, posible_cheaper_buyin_price)
 
     def try_to_improve_orders(self):
@@ -320,14 +334,25 @@ class MyClient(Client):
             else:
                 # here, order['type'] == 'buy'
                 self.try_to_buy_better(order)
+    def is_stop_order(self, order):
+        return float(order['price']) == stop_order_price
     
     def trade(self):
+        global output
         self.update_active_orders()
+        should_stop_activity = False
+        output['Active buy order'] = 'None'
+        output['Active sell order'] = 'None'
         if self.orders:
             for order in self.orders:
-                
-                print "1 active order to {} {} at ${}".format(order['type'], \
-                        order['amount']['remaining'], order['price'])
+                if self.is_stop_order(order):
+                    should_stop_activity = True
+                else:
+                    key = 'Active {} order'.format(order['type'])
+                    output[key] = "{} at ${} (${:.2f})".format(order['amount']['remaining'], order['price'], float(order['amount']['remaining']) * float(order['price']))
+            if should_stop_activity:
+                output['stop_order'] = 'A stop activity order type exists (price at {}), activity is stopped until order is removed...'.format(stop_order_price)
+                return       
             self.try_to_improve_orders()
             if not self.get_active_orders_of_type('buy') and self.can_buy():
                 # This happen when a partial sell have been executed, so we should start buying
@@ -348,34 +373,39 @@ class MyClient(Client):
 client = MyClient(api_key, api_secret)
 print 'Welcome to CryptoBot\n'
 print 'Market chosen: {}\n'.format(market)
+
 def mainCycle():
+    global output
     ticker = client.get_global_crypto_ticker(currency=currency)
     crypto_global_price = ticker['price_' + str.lower(currency)]
-    print "Global {} price: ${}".format(market, crypto_global_price)
-    print "Global change in last hour: %" + ticker['percent_change_1h']
-    client.print_balances()
+    output['global_price'] = "Global {} price: ${}".format(market, crypto_global_price)
+    output['global_price_h'] = "Global change in last hour: %" + ticker['percent_change_1h']
+    # client.print_balances()
     spread = client.get_spread()
-    print "Spread:", spread
+    output['spread'] = "Spread: " + spread.__repr__()
     
     # Getting recent trades
     sells = client.get_last_trades('sell', hot_minutes)
     purchases = client.get_last_trades('buy', hot_minutes)
     # Printing activity
-    print 'Activity:'
-    print "{} sells made in the last {} minutes".format(sells, hot_minutes)
-    print "{} purchases made in the last {} minutes".format(purchases, hot_minutes)
+    output['activity_sells'] = "{} sells made in the last {} minutes".format(sells, hot_minutes)
+    output['activity_buys'] = "{} purchases made in the last {} minutes".format(purchases, hot_minutes)
     # Printing market status
-    print "Spread is", u"Hi \u2714" if client.spread_is_hi() else u"Low \u274C", \
-          "({} <= %{})".format(spread['porcentage'], spread_threshold * 100)
+    spread_status = u"Spread is {}".format(u"Hi \u2714" if client.spread_is_hi() else u"Low \u2718")
+    spread_status += " ({} <= %{})".format(spread['porcentage'], spread_threshold * 100)
+    output['spread_status'] = spread_status
     global_price = client.get_global_crypto_price(currency=currency)
     sell_percentage_above_global = (1 - global_price / client.spread['bid'])
-    print "Sellig price is", u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u274C", \
-          "(%{} above global, specting at least %{})".format(sell_percentage_above_global//0.001/10, sell_above_global*100)
-    print "Selling activity is", u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u274C", \
-          "(at least {} in the last {} minutes)".format(minimum_sells_in_hot_minutes_to_sell, hot_minutes)
+    selling_price_status = u"Sellig price is {}".format(u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u2718")
+    selling_price_status += " (%{} above global, specting at least %{})".format(sell_percentage_above_global//0.001/10, sell_above_global*100)
+    output['selling_price_status'] = selling_price_status
+    selling_activity_status = u"Selling activity is {}".format(u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u2718")
+    selling_activity_status += " (at least {} in the last {} minutes)".format(minimum_sells_in_hot_minutes_to_sell, hot_minutes)
+    output['selling_activity_status'] = selling_activity_status
     global_price_change_is_low = float(ticker['percent_change_1h']) < change_1h_min_to_sell
-    print "Global price change is", u"Low \u2714" if global_price_change_is_low else u"Hi \u274C", \
-          "(%{} < %{})".format(ticker['percent_change_1h'], change_1h_min_to_sell)
+    global_price_change_status = u"Global price change is {}".format(u"Low \u2714" if global_price_change_is_low else u"Hi \u2718")
+    global_price_change_status += " (%{} < %{})".format(ticker['percent_change_1h'], change_1h_min_to_sell)
+    output['global_price_change_status'] = global_price_change_status
 
     client.trade()
 
@@ -387,12 +417,27 @@ def mainCycle():
 # Para correr esto en ipython:
 # %run main.py
 import traceback
-
-while True:
-    try:
+def sort_key(x):
+    # print 'sort_key', len(x), x
+    result = 0
+    key = x[0]
+    if 'Active' in key or 'activity' in key:
+        result = 1
+    if 'status' in key:
+        result = 2
+    if 'next' in key or 'event' in key:
+        result = 3
+    # print "SORT_KEY", key, result
+    return result
+with output(output_type="dict", sort_key=sort_key) as output:
+    while True:
+        # try:
+        output['next_update'] = "now..."
         mainCycle()
-    except Exception as inst:
-        print type(inst), inst
-        traceback.print_exc()
-    print "Will check again in {} seconds...\n".format(while_seconds_delay)
-    time.sleep(while_seconds_delay)
+        # except Exception as inst:
+        #     print type(inst), inst
+        #     traceback.print_exc()
+        # print "Will check again in {} seconds...\n".format(while_seconds_delay)
+        for i in range(while_seconds_delay, 0, -1):
+            output['next_update'] = "in {} seconds...".format(i)
+            time.sleep(1)
