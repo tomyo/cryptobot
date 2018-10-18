@@ -18,10 +18,10 @@ if len(sys.argv) > 1:
 currency = min(market.strip('XLM'), market.strip('ETH'))
 crypto = min(market.strip('ARS'), market.strip('CLP'))
 crypto_long_name = 'ethereum' if crypto == 'ETH' else 'stellar'
-spread_threshold = 0.03  # We start tunnel strategy obove this relation value
+spread_threshold = 0.0275  # We start tunnel strategy obove this relation value
 hot_minutes = 30  # Time for active purchases
 while_seconds_delay = 20
-sell_amount = 0.5 if crypto == 'ETH' else 10
+sell_amount = 0.5 if crypto == 'ETH' else 400
 # buy_amount  = 0.25  # Whe sell all FIAT available
 minimum_sells_in_hot_minutes_to_sell = 3  # How purchases give us confident
 buy_minimum = 50 # (ars available to buy)
@@ -197,7 +197,7 @@ class MyClient(Client):
     
     def selling_price_is_hi(self):
         global_price = self.get_global_crypto_price(currency=currency)
-        return global_price * (1 + sell_above_global) < self.get_spread()['bid']
+        return global_price * (1 + sell_above_global) <= self.get_spread()['bid']
     
     def global_price_change_is_low(self):
         pass
@@ -218,11 +218,13 @@ class MyClient(Client):
             sell_price = fixed_price
         else:
             sell_price = self.get_best_selling_price_above_spread_threshold()
+        amount = float(amount)
         result = self.create_order(market, amount, sell_price, 'sell')
         output['Active sell order'] = "{:.3f} at ${:.3f} (${:.2f})".format(amount, sell_price, amount * sell_price)
-        debug('New order:', 'sell', market, amount, "at", sell_price)
+        fixed_price_text = ""
         if fixed_price:
-            debug("(Using fixed_price)")
+            fixed_price_text  = "(Using fixed_price: {})".format(fixed_price)
+        debug('New order:', 'sell', market, amount, "at", sell_price, fixed_price_text)
         return result
 
     def get_buying_last_sell_recovery_price(self):
@@ -396,7 +398,7 @@ def mainCycle():
     output['spread_status'] = spread_status
     global_price = client.get_global_crypto_price(currency=currency)
     sell_percentage_above_global = (1 - global_price / client.spread['bid'])
-    selling_price_status = u"Sellig price is {}".format(u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u2718")
+    selling_price_status = u"Selling price is {}".format(u"Hi \u2714" if client.selling_price_is_hi() else u"Low \u2718")
     selling_price_status += " (%{} above global, specting at least %{})".format(sell_percentage_above_global//0.001/10, sell_above_global*100)
     output['selling_price_status'] = selling_price_status
     selling_activity_status = u"Selling activity is {}".format(u"Hi \u2714" if client.selling_activity_is_hi() else u"Low \u2718")
@@ -421,22 +423,24 @@ def sort_key(x):
     # print 'sort_key', len(x), x
     result = 0
     key = x[0]
-    if 'Active' in key or 'activity' in key:
-        result = 1
-    if 'status' in key:
+    if 'activity' in key:
         result = 2
-    if 'next' in key or 'event' in key:
+    if 'status' in key:
         result = 3
+    if 'next' in key or 'event' in key:
+        result = 4
+    if 'Active' in key:
+        result = 5
     # print "SORT_KEY", key, result
     return result
 with output(output_type="dict", sort_key=sort_key) as output:
     while True:
-        # try:
-        output['next_update'] = "now..."
-        mainCycle()
-        # except Exception as inst:
-        #     print type(inst), inst
-        #     traceback.print_exc()
+        try:
+            output['next_update'] = "now..."
+            mainCycle()
+        except Exception as inst:
+            print type(inst), inst
+            traceback.print_exc()
         # print "Will check again in {} seconds...\n".format(while_seconds_delay)
         for i in range(while_seconds_delay, 0, -1):
             output['next_update'] = "in {} seconds...".format(i)
